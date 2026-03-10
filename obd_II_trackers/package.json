@@ -1,0 +1,39 @@
+{
+  "name": "obd-ii-telemetry-server",
+  "version": "1.0.0",
+  "description": "Production-grade Node.js telemetry server for OBD-II GPS devices",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "jest --verbose",
+    "test:coverage": "jest --coverage --verbose"
+  },
+  "keywords": [
+    "obd-ii",
+    "telemetry",
+    "gps",
+    "socket.io",
+    "jt808"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.13.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.6",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.3"
+  }
+}

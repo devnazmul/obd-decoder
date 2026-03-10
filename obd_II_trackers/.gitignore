@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+logs/
+.env
+*.log
+.docx_extracted/

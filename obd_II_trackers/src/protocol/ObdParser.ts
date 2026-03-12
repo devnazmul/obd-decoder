@@ -95,6 +95,18 @@ export interface PlatformAckData {
   result: number;
 }
 
+export interface ParsedObdData {
+  rpm?: number;
+  coolantTemp?: number;
+  engineLoad?: number;
+  throttlePos?: number;
+  intakePressure?: number;
+  intakeTemp?: number;
+  ignitionAdvance?: number;
+  totalMileage?: number;
+  fuelUsed?: number;
+}
+
 /**
  * ObdParser — JT808 Protocol message parser.
  *
@@ -553,5 +565,94 @@ export class ObdParser {
       raw,
       data: null,
     };
+  }
+
+  /**
+   * Parses the 0200 body AND the attached OBD/Status blocks
+   */
+  public static parse0200WithObd(bodyHex: string) {
+    // Parse base GPS (First 28 bytes / 56 hex chars)
+    const baseData = this.parseBaseLocation(bodyHex.substring(0, 56));
+
+    // Parse appended blocks (Hex string after 56 chars)
+    const additionalHex = bodyHex.substring(56);
+    const obdData = this.parseAppendedBlocks(additionalHex);
+
+    return { ...baseData, obd: obdData };
+  }
+
+  private static parseBaseLocation(hex: string) {
+    const lat = parseInt(hex.substring(16, 24), 16) / 1000000;
+    const lon = parseInt(hex.substring(24, 32), 16) / 1000000;
+    const speedKmH = parseInt(hex.substring(36, 40), 16) / 10;
+    return { lat, lon, speedKmH };
+  }
+
+  private static parseAppendedBlocks(hex: string): ParsedObdData {
+    let pointer = 0;
+    const obd: ParsedObdData = {};
+
+    while (pointer < hex.length) {
+      const blockId = hex.substring(pointer, pointer + 2);
+      const lengthHex = hex.substring(pointer + 2, pointer + 4);
+      if (!lengthHex) break;
+
+      const length = parseInt(lengthHex, 16) * 2; // in hex chars
+      const dataHex = hex.substring(pointer + 4, pointer + 4 + length);
+
+      // Parse JT808 Standard Blocks
+      if (blockId === "01") {
+        obd.totalMileage = parseInt(dataHex, 16) / 10;
+      }
+      // Parse J63S Custom OBD Block (Usually F3 or E3)
+      else if (blockId === "F3") {
+        Object.assign(obd, this.parseInnerObdPids(dataHex));
+      }
+
+      pointer += 4 + length;
+    }
+    return obd;
+  }
+
+  /**
+   * Extracts standard OBD-II formulas from the custom CAN block
+   */
+  private static parseInnerObdPids(f3Hex: string): Partial<ParsedObdData> {
+    let p = 0;
+    const result: Partial<ParsedObdData> = {};
+
+    while (p < f3Hex.length) {
+      const pid = f3Hex.substring(p, p + 4); // 2-byte PID ID
+      const len = parseInt(f3Hex.substring(p + 4, p + 6), 16) * 2;
+      const valHex = f3Hex.substring(p + 6, p + 6 + len);
+
+      const decVal = parseInt(valHex, 16);
+
+      switch (pid) {
+        case "0004":
+          result.engineLoad = Math.round((decVal * 100) / 255);
+          break; // PID 04
+        case "0005":
+          result.coolantTemp = decVal - 40;
+          break; // PID 05
+        case "000B":
+          result.intakePressure = decVal;
+          break; // PID 0B
+        case "000C":
+          result.rpm = decVal / 4;
+          break; // PID 0C
+        case "000E":
+          result.ignitionAdvance = decVal / 2 - 64;
+          break; // PID 0E
+        case "000F":
+          result.intakeTemp = decVal - 40;
+          break; // PID 0F
+        case "0011":
+          result.throttlePos = Math.round((decVal * 100) / 255);
+          break; // PID 11
+      }
+      p += 6 + len;
+    }
+    return result;
   }
 }

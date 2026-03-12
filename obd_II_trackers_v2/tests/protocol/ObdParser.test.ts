@@ -59,4 +59,26 @@ describe("ObdParser", () => {
       expect(passthrough.decodedAscii).toBe("VF1FL000565646260");
     });
   });
+
+  describe("ObdParser Deep Extraction", () => {
+    it("should correctly parse OBD PIDs from an F3 block", () => {
+      // Hex breakdown:
+      // 000C (PID 12 / RPM), Len 02, Data 0C50 (3152 dec -> 788 RPM)
+      // 0005 (PID 05 / Temp), Len 01, Data 52 (82 dec -> 42 C)
+      const mockF3Block = "000C020C5000050152";
+
+      // Use any to test private method (or make it public for testing)
+      const result = (ObdParser as any).parseInnerObdPids(mockF3Block);
+
+      expect(result.rpm).toBe(788);
+      expect(result.coolantTemp).toBe(42);
+    });
+
+    it("should calculate Throttle Position accurately", () => {
+      // 0011 (PID 17 / Throttle), Len 01, Data FF (255 dec -> 100% or 255% depending on ECU)
+      const mockF3Block = "001101FF";
+      const result = (ObdParser as any).parseInnerObdPids(mockF3Block);
+      expect(result.throttlePos).toBe(100);
+    });
+  });
 });

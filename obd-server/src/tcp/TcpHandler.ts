@@ -139,8 +139,13 @@ export class TcpHandler {
                                 const charCode = parseInt(payloadHex.substring(i, i + 2), 16);
                                 if (charCode >= 32 && charCode <= 126) asciiPayload += String.fromCharCode(charCode);
                             }
-                            if (asciiPayload.startsWith('P') || asciiPayload.startsWith('C')) {
-                                DeviceLogger.log(dId, 'ERROR', 'DTC Fault Detected', { code: asciiPayload });
+                            if (asciiPayload.startsWith('P') || asciiPayload.startsWith('C') || asciiPayload.startsWith('B') || asciiPayload.startsWith('U')) {
+                                const dtcs = require('../protocol/dtcs.json');
+                                const description = dtcs[asciiPayload] || 'Unknown Trouble Code';
+                                DeviceLogger.log(dId, 'ERROR', 'DTC Fault Detected', { 
+                                    code: asciiPayload,
+                                    description: description
+                                });
                             }
                         }
                     }

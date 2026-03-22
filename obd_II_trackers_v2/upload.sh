@@ -38,5 +38,5 @@ echo "📦 Installing dependencies and building on remote..."
 sshpass -e ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ${REMOTE_DIR} && npm install && npm run build"
 
 echo "🔄 Restarting service..."
-sshpass -e ssh ${REMOTE_USER}@${REMOTE_HOST} "pm2 restart obd-telemetry-server --update-env || pm2 start dist/index.js --name obd-telemetry-server"
+sshpass -e ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ${REMOTE_DIR} && (pm2 restart obd-telemetry-server --update-env || pm2 start dist/index.js --name obd-telemetry-server)"
 echo "🚀 Service restarted successfully!"

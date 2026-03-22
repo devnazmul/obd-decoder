@@ -83,14 +83,15 @@ export class TcpHandler {
                     if (locData.obd?.rawPids) {
                         const p = locData.obd.rawPids;
                         processedObd = {
-                            rpm: p["000C"] ? (p["000C"] / 4) : 0,
-                            coolantTemp: p["0006"] ? (p["0006"] - 40) : 64,
-                            airFlow: p["0010"] || 502,
-                            airTemp: p["000F"] ? (p["000F"] - 40) : 20,
-                            intakePressure: p["000B"] || 101,
-                            engineLoad: p["0004"] ? Math.round((p["0004"] * 100) / 255) : 32,
-                            throttlePos: p["0011"] || 255,
-                            ignitionAdvance: p["000E"] || -64
+                            batteryVoltage: p["0004"] ? (p["0004"] / 1000) : null, // Hex 3235 = 12.85 V
+                            totalMileage: p["0005"] ? (p["0005"] / 10) : locData.obd.totalMileage,
+                            coolantTemp: p["0006"] !== undefined ? p["0006"] : null, // Raw Celsius (No -40)
+                            intakePressure: p["000B"] !== undefined ? p["000B"] : null, // kPa
+                            rpm: p["000C"] !== undefined ? p["000C"] : 0, // Raw RPM
+                            ignitionAdvance: p["000E"] !== undefined ? ((p["000E"] / 2) - 64) : null,
+                            airTemp: p["000F"] !== undefined ? p["000F"] : null, // Assuming raw Celsius
+                            airFlow: p["0010"] !== undefined ? p["0010"] : null,
+                            throttlePos: p["0011"] !== undefined ? Math.round((p["0011"] * 100) / 255) : null
                         };
                     }
 

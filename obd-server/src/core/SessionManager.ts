@@ -24,10 +24,10 @@ export class SessionManager {
         if (trip && trip.isActive) {
             if (speedKmH > trip.maxSpeed) trip.maxSpeed = speedKmH;
             
-            const temp = rawPids && rawPids["0006"] ? (rawPids["0006"] - 40) : 0;
+            const temp = rawPids && rawPids["0006"] !== undefined ? rawPids["0006"] : 0;
             if (temp > trip.maxTemp) trip.maxTemp = temp;
             
-            const rpm = rawPids && rawPids["000C"] ? (rawPids["000C"] / 4) : 0;
+            const rpm = rawPids && rawPids["000C"] !== undefined ? rawPids["000C"] : 0;
             if (speedKmH === 0 && rpm > 0) trip.idleSeconds += 10;
             if (speedKmH > 120) trip.speedingSeconds += 10;
         }

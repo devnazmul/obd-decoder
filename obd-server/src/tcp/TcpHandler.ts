@@ -100,6 +100,8 @@ export class TcpHandler {
                         lat: locData.lat,
                         lon: locData.lon,
                         speed: locData.speedKmH,
+                        altitude: locData.altitude,
+                        direction: locData.direction,
                         mileage: locData.obd?.totalMileage || 0,
                         vehicleCondition: processedObd
                     });

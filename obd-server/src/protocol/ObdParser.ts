@@ -14,9 +14,12 @@ export class ObdParser {
     }
 
     public static parse0200WithObd(bodyHex: string) {
-        const baseData = this.parseBaseLocation(bodyHex.substring(0, 56));
-        const additionalHex = bodyHex.substring(56);
+        const baseData = this.parseBaseLocation(bodyHex);
+        
+        // Use the strictly calculated offset so TLV blocks never misalign
+        const additionalHex = bodyHex.substring(baseData.obdStartOffset);
         const obdData = this.parseAppendedBlocks(additionalHex);
+
         return { ...baseData, obd: obdData };
     }
 
@@ -32,16 +35,30 @@ export class ObdParser {
     }
 
     private static parseBaseLocation(hex: string) {
+        // Strict JT808 Big-Endian Extraction
         const lat = parseInt(hex.substring(16, 24), 16) / 1000000;
         const lon = parseInt(hex.substring(24, 32), 16) / 1000000;
+        const altitude = parseInt(hex.substring(32, 36), 16);
         const speedKmH = parseInt(hex.substring(36, 40), 16) / 10;
+        const direction = parseInt(hex.substring(40, 44), 16);
         
-        // Bulletproof Time Extraction via Regex
-        const timeMatch = hex.substring(40).match(/(2[0-9]{11})/);
-        const timeBcd = timeMatch ? timeMatch[0] : "";
+        // DETERMINISTIC BCD EXTRACTION (Fixes 2027-01-36 anomaly)
+        let timeBcd = "";
+        let obdStartOffset = 56; // Normal end of base location block
+
+        // Check if device injected the 1-byte proprietary anomaly before the time
+        // 2026 starts with '26'. We check standard offset (44) and shifted offset (46).
+        if (hex.substring(44, 46) === "26") {
+            timeBcd = hex.substring(44, 56);
+            obdStartOffset = 56;
+        } else if (hex.substring(46, 48) === "26") {
+            timeBcd = hex.substring(46, 58);
+            obdStartOffset = 58;
+        }
+
         const deviceTime = this.parseBcdTime(timeBcd);
 
-        return { lat, lon, speedKmH, deviceTime };
+        return { lat, lon, altitude, speedKmH, direction, deviceTime, obdStartOffset };
     }
 
     private static parseAppendedBlocks(hex: string): ParsedObdData {

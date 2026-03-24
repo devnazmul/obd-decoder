@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import { sessionManager } from '../core/SessionManager';
 
 const router = Router();
 const LOGS_DIR = path.join(process.cwd(), 'logs');
@@ -42,6 +43,58 @@ router.get('/devices', (req: Request, res: Response) => {
         }).map(f => f.replace('device_', ''));
 
         res.json({ devices });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * 6. Power Status APIs
+ */
+
+// GET /api/logs/devices/online - List running vehicles
+router.get('/devices/online', (req: Request, res: Response) => {
+    try {
+        const activeVehicles: any[] = [];
+        const allSessions = sessionManager.getAllSessions(); 
+        
+        allSessions.forEach(session => {
+            // If RPM > 0, the engine is physically running
+            if (session.lastRpm > 0) {
+                activeVehicles.push({
+                    deviceId: session.deviceId,
+                    engineStatus: "ON",
+                    rpm: session.lastRpm,
+                    voltage: session.lastVoltage,
+                    lastUpdated: new Date(session.lastSeen).toISOString()
+                });
+            }
+        });
+        
+        res.json({ activeVehicles });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/logs/devices/:deviceId/status - Check specific car
+router.get('/devices/:deviceId/status', (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.params;
+        const session = sessionManager.getSession(deviceId);
+        
+        if (!session) {
+            return res.json({ deviceId, deviceConnection: "OFFLINE", engineStatus: "UNKNOWN" });
+        }
+
+        // Is the connection stale? (e.g., hasn't sent a heartbeat in 10 minutes)
+        const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000);
+        const isEngineOn = session.lastRpm > 0;
+
+        res.json({
+            deviceId: session.deviceId,
+            deviceConnection: isOnline ? "ONLINE" : "OFFLINE",
+            engineStatus: isEngineOn ? "ON" : "OFF",
+            lastRpm: session.lastRpm,
+            lastVoltage: session.lastVoltage,
+            lastSeen: new Date(session.lastSeen).toISOString()
+        });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 

@@ -3,7 +3,7 @@ dotenv.config();
 
 import * as net from 'net';
 import { app, httpServer } from './server';
-import { SessionManager } from './core/SessionManager';
+import { SessionManager, sessionManager } from './core/SessionManager';
 import { TcpHandler } from './tcp/TcpHandler';
 import { DeviceLogger } from './core/DeviceLogger';
 
@@ -17,7 +17,6 @@ httpServer.listen(API_PORT, () => {
 });
 
 // 2. Start the TCP Server for the OBD-II Devices
-const sessionManager = new SessionManager();
 const tcpHandler = new TcpHandler(sessionManager);
 
 const tcpServer = net.createServer((socket) => {

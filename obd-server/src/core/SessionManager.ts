@@ -6,7 +6,14 @@ export class SessionManager {
 
     public updateSession(deviceId: string, ipAddress: string): void {
         if (!this.sessions.has(deviceId)) {
-            this.sessions.set(deviceId, { deviceId, ipAddress, connectedAt: Date.now(), lastSeen: Date.now() });
+            this.sessions.set(deviceId, { 
+                deviceId, 
+                ipAddress, 
+                connectedAt: Date.now(), 
+                lastSeen: Date.now(),
+                lastRpm: 0,
+                lastVoltage: 0
+            });
             this.trips.set(deviceId, this.getEmptyTrip());
         } else {
             const session = this.sessions.get(deviceId)!;
@@ -20,6 +27,13 @@ export class SessionManager {
     }
 
     public processTelemetry(deviceId: string, speedKmH: number, rawPids: any) {
+        // Update session stats
+        const session = this.sessions.get(deviceId);
+        if (session) {
+            session.lastRpm = rawPids && rawPids["000C"] !== undefined ? (rawPids["000C"] / 4) : 0;
+            session.lastVoltage = rawPids && rawPids["0004"] !== undefined ? (rawPids["0004"] / 1000) : 0;
+        }
+
         const trip = this.trips.get(deviceId);
         if (trip && trip.isActive) {
             if (speedKmH > trip.maxSpeed) trip.maxSpeed = speedKmH;
@@ -70,4 +84,14 @@ export class SessionManager {
         this.trips.set(deviceId, this.getEmptyTrip());
         return report;
     }
+
+    public getAllSessions(): DeviceSession[] {
+        return Array.from(this.sessions.values());
+    }
+
+    public getSession(deviceId: string): DeviceSession | undefined {
+        return this.sessions.get(deviceId);
+    }
 }
+
+export const sessionManager = new SessionManager();

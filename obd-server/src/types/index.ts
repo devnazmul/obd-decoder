@@ -3,6 +3,8 @@ export interface DeviceSession {
     ipAddress: string;
     connectedAt: number;
     lastSeen: number;
+    lastRpm: number;
+    lastVoltage: number;
 }
 
 export interface LiveTripState {

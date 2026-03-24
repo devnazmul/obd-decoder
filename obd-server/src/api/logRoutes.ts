@@ -9,7 +9,38 @@ const LOGS_DIR = path.join(process.cwd(), 'logs');
 router.get('/', (req: Request, res: Response) => {
     try {
         if (!fs.existsSync(LOGS_DIR)) return res.json({ devices: [] });
-        const devices = fs.readdirSync(LOGS_DIR).filter(f => fs.statSync(path.join(LOGS_DIR, f)).isDirectory());
+        const devices = fs.readdirSync(LOGS_DIR).filter(f => {
+            if (!f.startsWith('device_')) return false;
+            // Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
+            if (f === 'device_SYSTEM' || f === 'device_UNKNOWN_DEVICE') return false;
+            if (!/^\d+$/.test(f.replace('device_', ''))) return false;
+
+            const devicePath = path.join(LOGS_DIR, f);
+            if (!fs.statSync(devicePath).isDirectory()) return false;
+            const files = fs.readdirSync(devicePath);
+            return files.some(file => file.endsWith('.log'));
+        }).map(f => f.replace('device_', ''));
+        
+        res.json({ devices });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Alias for listing devices
+router.get('/devices', (req: Request, res: Response) => {
+    try {
+        if (!fs.existsSync(LOGS_DIR)) return res.json({ devices: [] });
+        const devices = fs.readdirSync(LOGS_DIR).filter(f => {
+            if (!f.startsWith('device_')) return false;
+            // Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
+            if (f === 'device_SYSTEM' || f === 'device_UNKNOWN_DEVICE') return false;
+            if (!/^\d+$/.test(f.replace('device_', ''))) return false;
+
+            const devicePath = path.join(LOGS_DIR, f);
+            if (!fs.statSync(devicePath).isDirectory()) return false;
+            const files = fs.readdirSync(devicePath);
+            return files.some(file => file.endsWith('.log'));
+        }).map(f => f.replace('device_', ''));
+
         res.json({ devices });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
@@ -17,17 +48,23 @@ router.get('/', (req: Request, res: Response) => {
 // List logs for a device
 router.get('/:deviceId', (req: Request, res: Response) => {
     try {
-        const deviceDir = path.join(LOGS_DIR, req.params.deviceId);
+        const { deviceId } = req.params;
+        const deviceFolder = deviceId.startsWith('device_') ? deviceId : `device_${deviceId}`;
+        const deviceDir = path.join(LOGS_DIR, deviceFolder);
+        
         if (!fs.existsSync(deviceDir)) return res.status(404).json({ error: "Device not found" });
         const files = fs.readdirSync(deviceDir).filter(f => f.endsWith('.log'));
-        res.json({ deviceId: req.params.deviceId, logs: files });
+        res.json({ deviceId, logs: files });
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // View specific log contents
 router.get('/:deviceId/:filename', (req: Request, res: Response) => {
     try {
-        const filePath = path.join(LOGS_DIR, req.params.deviceId, req.params.filename);
+        const { deviceId, filename } = req.params;
+        const deviceFolder = deviceId.startsWith('device_') ? deviceId : `device_${deviceId}`;
+        const filePath = path.join(LOGS_DIR, deviceFolder, filename);
+        
         if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Log not found" });
 
         const fileContent = fs.readFileSync(filePath, 'utf-8');
@@ -98,6 +135,88 @@ router.get('/:deviceId/:filename/playback', (req: Request, res: Response) => {
             date: req.params.filename,
             totalTrips: trips.length,
             trips: trips
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * 5. Duration-based Playback: Aggregate data from multiple log files within a date range
+ * Query: ?start=2026-03-24T00:00:00Z&end=2026-03-24T23:59:59Z
+ */
+router.get('/:deviceId/playback/duration', (req: Request, res: Response) => {
+    try {
+        const { deviceId } = req.params;
+        const { start, end } = req.query;
+
+        if (!start || !end) {
+            return res.status(400).json({ error: "Start and end parameters are required" });
+        }
+
+        const startDate = new Date(start as string);
+        const endDate = new Date(end as string);
+        const deviceFolder = deviceId.startsWith('device_') ? deviceId : `device_${deviceId}`;
+        const deviceDir = path.join(LOGS_DIR, deviceFolder);
+
+        if (!fs.existsSync(deviceDir)) {
+            return res.status(404).json({ error: "Device logs not found" });
+        }
+
+        // Collect all potential log files in the range
+        const logFiles = fs.readdirSync(deviceDir).filter(f => f.endsWith('.log'));
+        const relevantPoints: any[] = [];
+
+        logFiles.forEach(filename => {
+            // Filename format: device_{id}_{YYYY-MM-DD}.log
+            const dateMatch = filename.match(/(\d{4}-\d{2}-\d{2})/);
+            if (!dateMatch) return;
+
+            const fileDate = new Date(dateMatch[1]);
+            // Check if file date is within range (ignoring time for broad match, then filter points)
+            // But we can be more precise: only read files that COULD contain data in range
+            const fileStart = new Date(dateMatch[1]);
+            fileStart.setHours(0,0,0,0);
+            const fileEnd = new Date(dateMatch[1]);
+            fileEnd.setHours(23,59,59,999);
+
+            if (fileEnd < startDate || fileStart > endDate) return;
+
+            const filePath = path.join(deviceDir, filename);
+            const fileContent = fs.readFileSync(filePath, 'utf-8');
+            const lines = fileContent.trim().split('\n');
+
+            lines.forEach(line => {
+                if (!line) return;
+                try {
+                    const log = JSON.parse(line);
+                    if (log.event === 'Decoded Location & OBD') {
+                        const pointTime = new Date(log.timestamp || log.time);
+                        if (pointTime >= startDate && pointTime <= endDate) {
+                            relevantPoints.push({
+                                lat: log.lat,
+                                lng: log.lon || log.lng,
+                                speed: log.speed,
+                                direction: log.direction,
+                                time: log.time || log.timestamp,
+                                obd: log.vehicleCondition,
+                                timestamp: log.timestamp || log.time
+                            });
+                        }
+                    }
+                } catch (e) {}
+            });
+        });
+
+        // Sort by timestamp
+        relevantPoints.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        res.json({
+            deviceId,
+            start,
+            end,
+            totalPoints: relevantPoints.length,
+            points: relevantPoints
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });

@@ -21,6 +21,9 @@ export SSHPASS=$SERVER_PASSWORD
 mkdir -p ${LOCAL_DIR}/logs
 
 echo "📥 Downloading logs from ${REMOTE_HOST}..."
+
+# Sync logs from remote to local
+# We don't use --delete here to avoid losing local logs that might have been rotated on the server
 sshpass -e rsync -av \
     -e ssh \
     ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/logs/ ${LOCAL_DIR}/logs/

@@ -15,8 +15,6 @@ export class ObdParser {
 
     public static parse0200WithObd(bodyHex: string) {
         const baseData = this.parseBaseLocation(bodyHex);
-        
-        // Use the strictly calculated offset so TLV blocks never misalign
         const additionalHex = bodyHex.substring(baseData.obdStartOffset);
         const obdData = this.parseAppendedBlocks(additionalHex);
 
@@ -35,30 +33,29 @@ export class ObdParser {
     }
 
     private static parseBaseLocation(hex: string) {
-        // Strict JT808 Big-Endian Extraction
-        const lat = parseInt(hex.substring(16, 24), 16) / 1000000;
-        const lon = parseInt(hex.substring(24, 32), 16) / 1000000;
-        const altitude = parseInt(hex.substring(32, 36), 16);
-        const speedKmH = parseInt(hex.substring(36, 40), 16) / 10;
-        const direction = parseInt(hex.substring(40, 44), 16);
-        
-        // DETERMINISTIC BCD EXTRACTION (Fixes 2027-01-36 anomaly)
-        let timeBcd = "";
-        let obdStartOffset = 56; // Normal end of base location block
+        // Find the BCD Timestamp (e.g., 260325... for Year 2026, Month 03, Day 25)
+        // This is a bulletproof way to align the parser because the time format is strictly fixed.
+        const timeMatch = hex.match(/(260[1-9][0-3][0-9][0-2][0-9][0-5][0-9][0-5][0-9])/);
+        const timeBcd = timeMatch ? timeMatch[1] : "";
+        const timeIndex = timeMatch ? timeMatch.index! : 36;
 
-        // Check if device injected the 1-byte proprietary anomaly before the time
-        // 2026 starts with '26'. We check standard offset (44) and shifted offset (46).
-        if (hex.substring(44, 46) === "26") {
-            timeBcd = hex.substring(44, 56);
-            obdStartOffset = 56;
-        } else if (hex.substring(46, 48) === "26") {
-            timeBcd = hex.substring(46, 58);
-            obdStartOffset = 58;
-        }
+        // Count BACKWARDS from the timestamp to get perfect GPS alignment
+        const dirHex = hex.substring(timeIndex - 4, timeIndex);
+        const speedHex = hex.substring(timeIndex - 8, timeIndex - 4);
+        const altHex = hex.substring(timeIndex - 12, timeIndex - 8);
+        const lonHex = hex.substring(timeIndex - 20, timeIndex - 12);
+        const latHex = hex.substring(timeIndex - 28, timeIndex - 20);
 
+        const lat = parseInt(latHex, 16) / 1000000;
+        const lon = parseInt(lonHex, 16) / 1000000;
+        const speedKmH = parseInt(speedHex, 16) / 10;
+        const direction = parseInt(dirHex, 16);
         const deviceTime = this.parseBcdTime(timeBcd);
 
-        return { lat, lon, altitude, speedKmH, direction, deviceTime, obdStartOffset };
+        // Mark where the OBD TLV blocks start (immediately after the timestamp)
+        const obdStartOffset = timeIndex + 12;
+
+        return { lat, lon, speedKmH, direction, deviceTime, obdStartOffset };
     }
 
     private static parseAppendedBlocks(hex: string): ParsedObdData {

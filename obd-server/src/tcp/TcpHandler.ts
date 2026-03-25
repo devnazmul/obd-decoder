@@ -76,48 +76,59 @@ export class TcpHandler {
                     break;
 
                 case '0200': // Location & OBD
-                    try {
-                        const locData = ObdParser.parse0200WithObd(header.body);
-                        this.sessionManager.processTelemetry(dId, locData.speedKmH, locData.obd?.rawPids);
+                    const locData = ObdParser.parse0200WithObd(header.body);
 
-                        let processedObd = {};
-                        if (locData.obd?.rawPids) {
-                            const p = locData.obd.rawPids;
-                            processedObd = {
-                                batteryVoltage: p["0004"] ? (p["0004"] / 1000) : null,
-                                totalMileage: p["0005"] ? (p["0005"] / 10) : locData.obd.totalMileage,
-                                coolantTemp: p["0006"] !== undefined ? p["0006"] : null,
-                                intakePressure: p["000B"] !== undefined ? p["000B"] : null,
-                                rpm: p["000C"] !== undefined ? p["000C"] : 0,
-                                ignitionAdvance: p["000E"] !== undefined ? ((p["000E"] / 2) - 64) : null,
-                                airTemp: p["000F"] !== undefined ? p["000F"] : null,
-                                airFlow: p["0010"] !== undefined ? p["0010"] : null,
-                                throttlePos: p["0011"] !== undefined ? Math.round((p["0011"] * 100) / 255) : null
-                            };
-                        }
+                    let processedObd: any = {};
+                    let currentRpm = 0;
+                    let currentVoltage = 0;
 
-                        const cleanDataPayload = {
-                            time: locData.deviceTime,
-                            lat: locData.lat,
-                            lon: locData.lon,
-                            speed: locData.speedKmH,
-                            direction: locData.direction,
-                            mileage: locData.obd?.totalMileage || 0,
-                            vehicleCondition: processedObd
+                    // Apply the correct Proprietary J63S Dictionary
+                    if (locData.obd?.rawPids) {
+                        const p = locData.obd.rawPids;
+                        currentRpm = p["0003"] !== undefined ? p["0003"] : 0;          // Real RPM (No division)
+                        currentVoltage = p["0004"] ? (p["0004"] / 1000) : 0;           // Real Battery Voltage
+
+                        processedObd = {
+                            batteryVoltage: currentVoltage,
+                            totalMileage: p["0005"] ? (p["0005"] / 10) : locData.obd.totalMileage,
+                            coolantTemp: p["0009"] !== undefined ? (p["0009"] - 40) : null, // PID 0009 is Coolant
+                            intakePressure: p["000B"] !== undefined ? p["000B"] : null,
+                            rpm: currentRpm,
+                            engineLoad: p["0008"] !== undefined ? p["0008"] : null,         // PID 0008 is Load %
+                            ignitionAdvance: p["000E"] !== undefined ? ((p["000E"] / 2) - 64) : null,
+                            airTemp: p["000F"] !== undefined ? (p["000F"] - 40) : null,
+                            airFlow: p["0010"] !== undefined ? p["0010"] : null,
+                            throttlePos: p["0011"] !== undefined ? Math.round((p["0011"] * 100) / 255) : null
                         };
-
-                        // 1. Save to historical log file
-                        DeviceLogger.log(dId, 'INFO', 'Decoded Location & OBD', cleanDataPayload);
-
-                        // 2. LIVE MAP UPDATE: Broadcast to any connected Frontend UI!
-                        io.emit(`live-location-${dId}`, cleanDataPayload);
-
-                        const locAck = HexUtils.createUniversalReply(dId, header.seqNumber, header.msgId);
-                        socket.write(locAck);
-                        DeviceLogger.log(dId, 'ACK', 'Sent 8001 Universal Reply', { hex: locAck.toString('hex') });
-                    } catch (e: any) {
-                        DeviceLogger.log(dId, 'ERROR', 'Failed to process 0200 message', { error: e.message });
                     }
+
+                    // --- TRUE ENGINE ON/OFF DETECTION ---
+                    // An engine is only running if RPM > 0 OR Alternator is charging (>13.2V)
+                    const isEngineRunning = currentRpm > 0 || currentVoltage >= 13.2;
+                    
+                    let actualSpeed = locData.speedKmH;
+                    if (!isEngineRunning) {
+                        actualSpeed = 0; // Prevent GPS drift if car is OFF
+                    }
+
+                    this.sessionManager.processTelemetry(dId, actualSpeed, locData.obd?.rawPids);
+
+                    const cleanDataPayload = {
+                        time: locData.deviceTime,
+                        lat: locData.lat,
+                        lon: locData.lon,
+                        speed: actualSpeed,
+                        direction: locData.direction,
+                        mileage: locData.obd?.totalMileage || 0,
+                        vehicleCondition: processedObd
+                    };
+
+                    DeviceLogger.log(dId, 'INFO', 'Decoded Location & OBD', cleanDataPayload);
+                    io.emit(`live-location-${dId}`, cleanDataPayload);
+
+                    const locAck = HexUtils.createUniversalReply(dId, header.seqNumber, header.msgId);
+                    socket.write(locAck);
+                    DeviceLogger.log(dId, 'ACK', 'Sent 8001 Universal Reply', { hex: locAck.toString('hex') });
                     break;
 
                 case '0900': // Passthrough (Trips, DTCs)

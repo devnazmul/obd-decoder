@@ -27,23 +27,36 @@ export class SessionManager {
     }
 
     public processTelemetry(deviceId: string, speedKmH: number, rawPids: any) {
-        // Update session stats
+        // 1. Extract the TRUE proprietary values
+        const currentRpm = rawPids && rawPids["0003"] !== undefined ? rawPids["0003"] : 0;
+        const currentVoltage = rawPids && rawPids["0004"] !== undefined ? (rawPids["0004"] / 1000) : 0;
+        
+        // 2. Update the live device session for the APIs
         const session = this.sessions.get(deviceId);
         if (session) {
-            session.lastRpm = rawPids && rawPids["000C"] !== undefined ? (rawPids["000C"] / 4) : 0;
-            session.lastVoltage = rawPids && rawPids["0004"] !== undefined ? (rawPids["0004"] / 1000) : 0;
+            session.lastRpm = currentRpm;
+            session.lastVoltage = currentVoltage;
         }
 
+        // 3. Update the active Trip (Renewals Data)
         const trip = this.trips.get(deviceId);
         if (trip && trip.isActive) {
+            // Update max speed
             if (speedKmH > trip.maxSpeed) trip.maxSpeed = speedKmH;
             
-            const temp = rawPids && rawPids["0006"] !== undefined ? rawPids["0006"] : 0;
+            // Extract J63S Coolant Temp (PID 0009)
+            const temp = rawPids && rawPids["0009"] !== undefined ? (rawPids["0009"] - 40) : 0;
             if (temp > trip.maxTemp) trip.maxTemp = temp;
             
-            const rpm = rawPids && rawPids["000C"] !== undefined ? rawPids["000C"] : 0;
-            if (speedKmH === 0 && rpm > 0) trip.idleSeconds += 10;
-            if (speedKmH > 120) trip.speedingSeconds += 10;
+            // Idle calculation: Car isn't moving, but engine is genuinely running (> 300 RPM)
+            if (speedKmH === 0 && currentRpm > 300) {
+                trip.idleSeconds += 10;
+            }
+            
+            // Speeding calculation
+            if (speedKmH > 120) {
+                trip.speedingSeconds += 10;
+            }
         }
     }
 

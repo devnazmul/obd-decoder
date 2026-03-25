@@ -50,15 +50,20 @@ router.get('/devices', (req: Request, res: Response) => {
  * 6. Power Status APIs
  */
 
-// GET /api/logs/devices/online - List running vehicles
+// 1. GET /api/logs/devices/online - List running vehicles
 router.get('/devices/online', (req: Request, res: Response) => {
     try {
         const activeVehicles: any[] = [];
+        
+        // Get all active sessions from your SessionManager
         const allSessions = sessionManager.getAllSessions(); 
         
-        allSessions.forEach(session => {
-            // If RPM > 0, the engine is physically running
-            if (session.lastRpm > 0) {
+        allSessions.forEach((session: any) => {
+            // UNIFIED ENGINE LOGIC
+            const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
+            
+            // Only return vehicles that are currently running
+            if (isEngineOn) {
                 activeVehicles.push({
                     deviceId: session.deviceId,
                     engineStatus: "ON",
@@ -70,22 +75,29 @@ router.get('/devices/online', (req: Request, res: Response) => {
         });
         
         res.json({ activeVehicles });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-// GET /api/logs/devices/:deviceId/status - Check specific car
+// 2. GET /api/logs/devices/:deviceId/status - Check specific car
 router.get('/devices/:deviceId/status', (req: Request, res: Response) => {
     try {
-        const { deviceId } = req.params;
-        const session = sessionManager.getSession(deviceId);
+        const session = sessionManager.getSession(req.params.deviceId);
         
         if (!session) {
-            return res.json({ deviceId, deviceConnection: "OFFLINE", engineStatus: "UNKNOWN" });
+            return res.json({ 
+                deviceId: req.params.deviceId, 
+                deviceConnection: "OFFLINE", 
+                engineStatus: "UNKNOWN" 
+            });
         }
 
-        // Is the connection stale? (e.g., hasn't sent a heartbeat in 10 minutes)
+        // Connection is valid if seen within 10 minutes
         const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000);
-        const isEngineOn = session.lastRpm > 0;
+        
+        // UNIFIED ENGINE LOGIC
+        const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
 
         res.json({
             deviceId: session.deviceId,
@@ -95,7 +107,9 @@ router.get('/devices/:deviceId/status', (req: Request, res: Response) => {
             lastVoltage: session.lastVoltage,
             lastSeen: new Date(session.lastSeen).toISOString()
         });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // List logs for a device

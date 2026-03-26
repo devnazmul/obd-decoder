@@ -151,43 +151,32 @@ router.get('/v1.0/trips', (req: Request, res: Response) => {
             const logTime = new Date(log.time || log.timestamp).getTime();
             const isEngineOn = log.vehicleCondition?.rpm > 300 || log.vehicleCondition?.batteryVoltage >= 13.2;
 
-            // Definition of "Moving" (Speed > 0)
             if (log.speed > 0) {
-                // If no trip is active, start one
                 if (!currentTrip) {
                     currentTrip = createNewTrip(log);
-                } 
-                // If there's an active trip, check if the gap since the LAST movement exceeds the threshold
-                else if (lastMovingLog && (logTime - new Date(lastMovingLog.time || lastMovingLog.timestamp).getTime()) >= stopThresholdMs) {
-                    // Close the current trip
-                    closeTrip(currentTrip, lastMovingLog);
-                    trips.push(currentTrip);
-                    
-                    // Start a new trip
+                } else if (lastMovingLog && (logTime - new Date(lastMovingLog.time || lastMovingLog.timestamp).getTime()) >= stopThresholdMs) {
+                    // Filter trips with more than 5 logs (prevents noise)
+                    if (currentTrip && currentTrip._logCount > 5) {
+                        closeTrip(currentTrip, lastMovingLog);
+                        trips.push(currentTrip);
+                    }
                     currentTrip = createNewTrip(log);
                 }
-
                 lastMovingLog = log;
             }
 
-            // Accumulate metrics if a trip is active
             if (currentTrip) {
-                // Update Max Speed
                 if (log.speed > currentTrip.max_speed) currentTrip.max_speed = log.speed;
-                
-                // Accumulate speed for Average calculation
                 currentTrip._speedSum += log.speed;
                 currentTrip._logCount += 1;
 
-                // Calculate Idle Time (Speed is 0, but engine is running)
                 if (log.speed === 0 && isEngineOn) {
-                    currentTrip.idle_time_seconds += 10; // Assuming ~10s polling rate
+                    currentTrip.idle_time_seconds += 10; 
                 }
             }
         }
 
-        // Close the final trip if it exists
-        if (currentTrip && lastMovingLog) {
+        if (currentTrip && lastMovingLog && currentTrip._logCount > 5) {
             closeTrip(currentTrip, lastMovingLog);
             trips.push(currentTrip);
         }
@@ -206,8 +195,10 @@ router.get('/v1.0/trips', (req: Request, res: Response) => {
 
 // Helper Functions
 function createNewTrip(startLog: any) {
+    // Ensure we send a consistent ISO-8601 UTC string to the frontend
+    const startTimeStr = startLog.timestamp || startLog.time;
     return {
-        start_time: startLog.time || startLog.timestamp,
+        start_time: new Date(startTimeStr).toISOString(),
         start_location: { lat: startLog.lat, lng: startLog.lon || startLog.lng },
         start_mileage: startLog.mileage,
         end_time: null,
@@ -222,7 +213,8 @@ function createNewTrip(startLog: any) {
 }
 
 function closeTrip(trip: any, endLog: any) {
-    trip.end_time = endLog.time || endLog.timestamp;
+    const endTimeStr = endLog.timestamp || endLog.time;
+    trip.end_time = new Date(endTimeStr).toISOString();
     trip.end_location = { lat: endLog.lat, lng: endLog.lon || endLog.lng };
     trip.distance_km = parseFloat((endLog.mileage - trip.start_mileage).toFixed(2));
     trip.average_speed = parseFloat((trip._speedSum / trip._logCount).toFixed(2));
@@ -331,10 +323,10 @@ router.get('/:deviceId/:filename/playback', (req: Request, res: Response) => {
 });
 
 /**
- * 5. Duration-based Playback: Aggregate data from multiple log files within a date range
+ * v1.0 Duration-based Playback: Aggregate data from multiple log files within a date range
  * Query: ?start=2026-03-24T00:00:00Z&end=2026-03-24T23:59:59Z
  */
-router.get('/:deviceId/playback/duration', (req: Request, res: Response) => {
+router.get('/v1.0/:deviceId/playback/duration', (req: Request, res: Response) => {
     try {
         const { deviceId } = req.params;
         const { start, end } = req.query;
@@ -343,8 +335,10 @@ router.get('/:deviceId/playback/duration', (req: Request, res: Response) => {
             return res.status(400).json({ error: "Start and end parameters are required" });
         }
 
-        const startDate = new Date(start as string);
-        const endDate = new Date(end as string);
+        // Add 30s buffer to catch points exactly at the boundary or from slightly noisy trip times
+        const startDate = new Date(new Date(start as string).getTime() - 30000);
+        const endDate = new Date(new Date(end as string).getTime() + 30000);
+        
         const deviceFolder = deviceId.startsWith('device_') ? deviceId : `device_${deviceId}`;
         const deviceDir = path.join(LOGS_DIR, deviceFolder);
 
@@ -381,15 +375,16 @@ router.get('/:deviceId/playback/duration', (req: Request, res: Response) => {
                     const log = JSON.parse(line);
                     if (log.event === 'Decoded Location & OBD') {
                         const pointTime = new Date(log.timestamp || log.time);
+                        const pointIsoTime = new Date(log.timestamp || log.time).toISOString();
                         if (pointTime >= startDate && pointTime <= endDate) {
                             relevantPoints.push({
                                 lat: log.lat,
                                 lng: log.lon || log.lng,
                                 speed: log.speed,
                                 direction: log.direction,
-                                time: log.time || log.timestamp,
+                                time: pointIsoTime,
                                 obd: log.vehicleCondition,
-                                timestamp: log.timestamp || log.time
+                                timestamp: pointIsoTime
                             });
                         }
                     }

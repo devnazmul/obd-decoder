@@ -12,14 +12,24 @@ router.get('/', (req: Request, res: Response) => {
         if (!fs.existsSync(LOGS_DIR)) return res.json({ devices: [] });
         const devices = fs.readdirSync(LOGS_DIR).filter(f => {
             if (!f.startsWith('device_')) return false;
-            // Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
+            const deviceId = f.replace('device_', '');
+            
+            // 1. Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
             if (f === 'device_SYSTEM' || f === 'device_UNKNOWN_DEVICE') return false;
-            if (!/^\d+$/.test(f.replace('device_', ''))) return false;
+            
+            // 2. Dynamically determine "real" devices (must be numeric BCD with at least 10 digits)
+            if (!/^\d{10,}$/.test(deviceId)) return false;
 
             const devicePath = path.join(LOGS_DIR, f);
             if (!fs.statSync(devicePath).isDirectory()) return false;
-            const files = fs.readdirSync(devicePath);
-            return files.some(file => file.endsWith('.log'));
+            
+            const files = fs.readdirSync(devicePath).filter(file => file.endsWith('.log'));
+            
+            // 3. Must have at least one log file > 10KB (filters out empty/heartbeat-only logs)
+            return files.some(file => {
+                const stats = fs.statSync(path.join(devicePath, file));
+                return stats.size > 10240; // 10KB
+            });
         }).map(f => f.replace('device_', ''));
         
         res.json({ devices });
@@ -32,14 +42,24 @@ router.get('/devices', (req: Request, res: Response) => {
         if (!fs.existsSync(LOGS_DIR)) return res.json({ devices: [] });
         const devices = fs.readdirSync(LOGS_DIR).filter(f => {
             if (!f.startsWith('device_')) return false;
-            // Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
+            const deviceId = f.replace('device_', '');
+            
+            // 1. Exclude system markers and hex noise IDs (only allow numeric BCD IDs)
             if (f === 'device_SYSTEM' || f === 'device_UNKNOWN_DEVICE') return false;
-            if (!/^\d+$/.test(f.replace('device_', ''))) return false;
+            
+            // 2. Dynamically determine "real" devices (must be numeric BCD with at least 10 digits)
+            if (!/^\d{10,}$/.test(deviceId)) return false;
 
             const devicePath = path.join(LOGS_DIR, f);
             if (!fs.statSync(devicePath).isDirectory()) return false;
-            const files = fs.readdirSync(devicePath);
-            return files.some(file => file.endsWith('.log'));
+            
+            const files = fs.readdirSync(devicePath).filter(file => file.endsWith('.log'));
+            
+            // 3. Must have at least one log file > 10KB (filters out empty/heartbeat-only logs)
+            return files.some(file => {
+                const stats = fs.statSync(path.join(devicePath, file));
+                return stats.size > 10240; // 10KB
+            });
         }).map(f => f.replace('device_', ''));
 
         res.json({ devices });

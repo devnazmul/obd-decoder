@@ -67,70 +67,172 @@ router.get('/devices', (req: Request, res: Response) => {
 });
 
 /**
- * 6. Power Status APIs
+ * GET /api/logs/v1.0/devices/status
+ * Returns the status of all registered devices.
  */
-
-// 1. GET /api/logs/devices/online - List running vehicles
-router.get('/devices/online', (req: Request, res: Response) => {
+router.get('/v1.0/devices/status', (req: Request, res: Response) => {
     try {
-        const activeVehicles: any[] = [];
-        
-        // Get all active sessions from your SessionManager
+        const statuses: any[] = [];
         const allSessions = sessionManager.getAllSessions(); 
-        
+
         allSessions.forEach((session: any) => {
-            // UNIFIED ENGINE LOGIC
+            const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000); // 10 minutes
             const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
-            
-            // Only return vehicles that are currently running
-            if (isEngineOn) {
-                activeVehicles.push({
-                    deviceId: session.deviceId,
-                    engineStatus: "ON",
+
+            statuses.push({
+                vehicle_id: session.deviceId,
+                connection_status: isOnline ? "ONLINE" : "OFFLINE",
+                engine_status: isEngineOn ? "ON" : "OFF",
+                last_seen: new Date(session.lastSeen).toISOString(),
+                telemetry: {
                     rpm: session.lastRpm,
-                    voltage: session.lastVoltage,
-                    lastUpdated: new Date(session.lastSeen).toISOString()
-                });
-            }
+                    voltage: session.lastVoltage
+                }
+            });
         });
-        
-        res.json({ activeVehicles });
+
+        res.json({ total_devices: statuses.length, devices: statuses });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// 2. GET /api/logs/devices/:deviceId/status - Check specific car
-router.get('/devices/:deviceId/status', (req: Request, res: Response) => {
+/**
+ * GET /api/logs/v1.0/trips
+ * Dynamic Trip Segmentation based on stop duration.
+ */
+router.get('/v1.0/trips', (req: Request, res: Response) => {
     try {
-        const session = sessionManager.getSession(req.params.deviceId);
-        
-        if (!session) {
-            return res.json({ 
-                deviceId: req.params.deviceId, 
-                deviceConnection: "OFFLINE", 
-                engineStatus: "UNKNOWN" 
-            });
+        const vehicle_id = req.query.vehicle_id as string;
+        const start_time = req.query.start_time as string; // Format: YYYY-MM-DD
+        const end_time = req.query.end_time as string;     // Format: YYYY-MM-DD
+        const min_stop = parseInt(req.query.min_stop_duration_minutes as string) || 5;
+
+        if (!vehicle_id || !start_time || !end_time) {
+            return res.status(400).json({ error: "Missing required parameters: vehicle_id, start_time, end_time" });
         }
 
-        // Connection is valid if seen within 10 minutes
-        const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000);
-        
-        // UNIFIED ENGINE LOGIC
-        const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
+        const deviceFolder = vehicle_id.startsWith('device_') ? vehicle_id : `device_${vehicle_id}`;
+        const deviceDir = path.join(LOGS_DIR, deviceFolder);
+        if (!fs.existsSync(deviceDir)) return res.json({ trips: [] });
+
+        // Load logs within the date range
+        const files = fs.readdirSync(deviceDir).filter(f => f.endsWith('.log'));
+        let allLogs: any[] = [];
+
+        files.forEach(file => {
+            // Check if file date is within range
+            const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})/);
+            if (dateMatch) {
+                const fileDateStr = dateMatch[1];
+                if (fileDateStr < start_time || fileDateStr > end_time) return;
+            }
+
+            const content = fs.readFileSync(path.join(deviceDir, file), 'utf-8');
+            content.trim().split('\n').forEach(line => {
+                try {
+                    const parsed = JSON.parse(line);
+                    if (parsed.event === 'Decoded Location & OBD') {
+                        allLogs.push(parsed);
+                    }
+                } catch (e) {}
+            });
+        });
+
+        // Sort chronologically
+        allLogs.sort((a, b) => new Date(a.time || a.timestamp).getTime() - new Date(b.time || b.timestamp).getTime());
+
+        const trips: any[] = [];
+        let currentTrip: any = null;
+        let lastMovingLog: any = null;
+        const stopThresholdMs = min_stop * 60 * 1000;
+
+        for (const log of allLogs) {
+            const logTime = new Date(log.time || log.timestamp).getTime();
+            const isEngineOn = log.vehicleCondition?.rpm > 300 || log.vehicleCondition?.batteryVoltage >= 13.2;
+
+            // Definition of "Moving" (Speed > 0)
+            if (log.speed > 0) {
+                // If no trip is active, start one
+                if (!currentTrip) {
+                    currentTrip = createNewTrip(log);
+                } 
+                // If there's an active trip, check if the gap since the LAST movement exceeds the threshold
+                else if (lastMovingLog && (logTime - new Date(lastMovingLog.time || lastMovingLog.timestamp).getTime()) >= stopThresholdMs) {
+                    // Close the current trip
+                    closeTrip(currentTrip, lastMovingLog);
+                    trips.push(currentTrip);
+                    
+                    // Start a new trip
+                    currentTrip = createNewTrip(log);
+                }
+
+                lastMovingLog = log;
+            }
+
+            // Accumulate metrics if a trip is active
+            if (currentTrip) {
+                // Update Max Speed
+                if (log.speed > currentTrip.max_speed) currentTrip.max_speed = log.speed;
+                
+                // Accumulate speed for Average calculation
+                currentTrip._speedSum += log.speed;
+                currentTrip._logCount += 1;
+
+                // Calculate Idle Time (Speed is 0, but engine is running)
+                if (log.speed === 0 && isEngineOn) {
+                    currentTrip.idle_time_seconds += 10; // Assuming ~10s polling rate
+                }
+            }
+        }
+
+        // Close the final trip if it exists
+        if (currentTrip && lastMovingLog) {
+            closeTrip(currentTrip, lastMovingLog);
+            trips.push(currentTrip);
+        }
 
         res.json({
-            deviceId: session.deviceId,
-            deviceConnection: isOnline ? "ONLINE" : "OFFLINE",
-            engineStatus: isEngineOn ? "ON" : "OFF",
-            lastRpm: session.lastRpm,
-            lastVoltage: session.lastVoltage,
-            lastSeen: new Date(session.lastSeen).toISOString()
+            vehicle_id,
+            total_trips: trips.length,
+            min_stop_duration_minutes: min_stop,
+            trips
         });
+
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
 });
+
+// Helper Functions
+function createNewTrip(startLog: any) {
+    return {
+        start_time: startLog.time || startLog.timestamp,
+        start_location: { lat: startLog.lat, lng: startLog.lon || startLog.lng },
+        start_mileage: startLog.mileage,
+        end_time: null,
+        end_location: null,
+        distance_km: 0,
+        max_speed: startLog.speed,
+        average_speed: 0,
+        idle_time_seconds: 0,
+        _speedSum: startLog.speed,
+        _logCount: 1
+    };
+}
+
+function closeTrip(trip: any, endLog: any) {
+    trip.end_time = endLog.time || endLog.timestamp;
+    trip.end_location = { lat: endLog.lat, lng: endLog.lon || endLog.lng };
+    trip.distance_km = parseFloat((endLog.mileage - trip.start_mileage).toFixed(2));
+    trip.average_speed = parseFloat((trip._speedSum / trip._logCount).toFixed(2));
+    trip.idle_time_minutes = parseFloat((trip.idle_time_seconds / 60).toFixed(2));
+    
+    // Clean up temporary variables
+    delete trip._speedSum;
+    delete trip._logCount;
+    delete trip.idle_time_seconds;
+}
 
 // List logs for a device
 router.get('/:deviceId', (req: Request, res: Response) => {
@@ -309,5 +411,6 @@ router.get('/:deviceId/playback/duration', (req: Request, res: Response) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 export default router;

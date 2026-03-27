@@ -72,23 +72,56 @@ router.get('/devices', (req: Request, res: Response) => {
  */
 router.get('/v1.0/devices/status', (req: Request, res: Response) => {
     try {
+        if (!fs.existsSync(LOGS_DIR)) return res.json({ total_devices: 0, devices: [] });
+
         const statuses: any[] = [];
-        const allSessions = sessionManager.getAllSessions(); 
+        const deviceFolders = fs.readdirSync(LOGS_DIR).filter(f => {
+            if (!f.startsWith('device_')) return false;
+            const deviceId = f.replace('device_', '');
+            
+            // Apply the "Same Logic" filter as the main /devices endpoint
+            if (f === 'device_SYSTEM' || f === 'device_UNKNOWN_DEVICE') return false;
+            if (!/^\d{10,}$/.test(deviceId)) return false;
 
-        allSessions.forEach((session: any) => {
-            const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000); // 10 minutes
-            const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
-
-            statuses.push({
-                vehicle_id: session.deviceId,
-                connection_status: isOnline ? "ONLINE" : "OFFLINE",
-                engine_status: isEngineOn ? "ON" : "OFF",
-                last_seen: new Date(session.lastSeen).toISOString(),
-                telemetry: {
-                    rpm: session.lastRpm,
-                    voltage: session.lastVoltage
-                }
+            const devicePath = path.join(LOGS_DIR, f);
+            if (!fs.statSync(devicePath).isDirectory()) return false;
+            
+            // Must have at least one log file > 10KB
+            const files = fs.readdirSync(devicePath).filter(file => file.endsWith('.log'));
+            return files.some(file => {
+                const stats = fs.statSync(path.join(devicePath, file));
+                return stats.size > 10240; 
             });
+        });
+
+        deviceFolders.forEach(folder => {
+            const deviceId = folder.replace('device_', '');
+            const session = sessionManager.getSession(deviceId);
+            
+            if (session) {
+                const isOnline = (Date.now() - session.lastSeen) < (10 * 60 * 1000); // 10 minutes
+                const isEngineOn = session.lastRpm > 300 || session.lastVoltage >= 13.2;
+
+                statuses.push({
+                    vehicle_id: deviceId,
+                    connection_status: isOnline ? "ONLINE" : "OFFLINE",
+                    engine_status: isEngineOn ? "ON" : "OFF",
+                    last_seen: new Date(session.lastSeen).toISOString(),
+                    telemetry: {
+                        rpm: session.lastRpm,
+                        voltage: session.lastVoltage
+                    }
+                });
+            } else {
+                // Device exists in logs but not in active memory
+                statuses.push({
+                    vehicle_id: deviceId,
+                    connection_status: "OFFLINE",
+                    engine_status: "OFF",
+                    last_seen: "Unknown", // Or try to extract from last log file
+                    telemetry: { rpm: 0, voltage: 0 }
+                });
+            }
         });
 
         res.json({ total_devices: statuses.length, devices: statuses });

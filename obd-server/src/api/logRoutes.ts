@@ -114,11 +114,25 @@ router.get('/v1.0/devices/status', (req: Request, res: Response) => {
                 });
             } else {
                 // Device exists in logs but not in active memory
+                // Try to find the last seen time from the latest log file's modification time
+                let lastSeenIso: string | null = null;
+                try {
+                    const devicePath = path.join(LOGS_DIR, folder);
+                    const files = fs.readdirSync(devicePath).filter(file => file.endsWith('.log'));
+                    if (files.length > 0) {
+                        const stats = files.map(file => fs.statSync(path.join(devicePath, file)));
+                        const latestMtime = Math.max(...stats.map(s => s.mtimeMs));
+                        lastSeenIso = new Date(latestMtime).toISOString();
+                    }
+                } catch (e) {
+                    // Fallback if file reading fails
+                }
+
                 statuses.push({
                     vehicle_id: deviceId,
                     connection_status: "OFFLINE",
                     engine_status: "OFF",
-                    last_seen: "Unknown", // Or try to extract from last log file
+                    last_seen: lastSeenIso,
                     telemetry: { rpm: 0, voltage: 0 }
                 });
             }
